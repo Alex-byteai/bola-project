@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 # ═══════════════════════════════════════════════════════════
 # API Comparator - Vulnerable vs Secure
@@ -13,46 +14,103 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Banner
-echo -e "${CYAN}"
-cat << "EOF"
+CONFIG_FILE_DEFAULT=".compare-apis.env"
+CONFIG_FILE="$CONFIG_FILE_DEFAULT"
+DEFAULT_VULN_API="http://localhost:3000"
+DEFAULT_SECURE_API="http://localhost:3001"
+DEFAULT_EMAIL="alice@example.com"
+DEFAULT_PASSWORD="password123"
+DEFAULT_TARGET_ORDER_ID=3
+DEFAULT_TIMEOUT=12
+DEFAULT_RESULTS_DIR="compare_results"
+DEFAULT_SLEEP=1.2
+
+VULN_API="${VULN_API:-$DEFAULT_VULN_API}"
+SECURE_API="${SECURE_API:-$DEFAULT_SECURE_API}"
+EMAIL="${BOLA_EMAIL:-$DEFAULT_EMAIL}"
+PASSWORD="${BOLA_PASSWORD:-$DEFAULT_PASSWORD}"
+TARGET_ORDER_ID="${TARGET_ORDER_ID:-$DEFAULT_TARGET_ORDER_ID}"
+REQUEST_TIMEOUT="${COMPARE_TIMEOUT:-$DEFAULT_TIMEOUT}"
+RESULTS_DIR="${COMPARE_RESULTS_DIR:-$DEFAULT_RESULTS_DIR}"
+SLEEP_TIME="${COMPARE_SLEEP:-$DEFAULT_SLEEP}"
+
+banner() {
+  echo -e "${CYAN}"
+  cat << "EOF"
 ╔══════════════════════════════════════════════════════════╗
 ║          API COMPARATOR - Vulnerable vs Secure           ║
 ║          Demonstrating BOLA Protection                   ║
 ╚══════════════════════════════════════════════════════════╝
 EOF
-echo -e "${NC}"
+  echo -e "${NC}"
+}
+usage() {
+  cat <<'EOF'
+Uso: compare_apis.sh [opciones]
 
-# Configuración
-VULN_API="${VULN_API:-http://192.168.1.50:3000}"
-SECURE_API="${SECURE_API:-http://192.168.1.50:3001}"
+Opciones:
+  -v, --vuln <url>          URL base API vulnerable (default http://localhost:3000)
+  -s, --secure <url>        URL base API segura (default http://localhost:3001)
+  -e, --email <correo>      Email de login (default alice@example.com)
+  -p, --password <pass>     Password (default password123)
+  -o, --order-id <id>       ID de orden víctima (default 3)
+  -t, --timeout <seg>       Timeout curl (default 12)
+  -r, --results-dir <dir>   Carpeta para logs (default compare_results)
+  --sleep <seg>             Delay entre fases (default 1.2)
+  -c, --config <archivo>    Archivo env opcional (.compare-apis.env)
+  -h, --help                Mostrar ayuda
 
-# Credenciales de prueba
-EMAIL="alice@example.com"
-PASSWORD="password123"
-TARGET_ORDER_ID=3  # Orden de Bob
+Variables: VULN_API, SECURE_API, BOLA_EMAIL, BOLA_PASSWORD,
+TARGET_ORDER_ID, COMPARE_TIMEOUT, COMPARE_RESULTS_DIR, COMPARE_SLEEP.
+EOF
+}
 
-echo -e "${BLUE}[*] API Vulnerable: ${VULN_API}${NC}"
-echo -e "${BLUE}[*] API Segura:     ${SECURE_API}${NC}"
-echo ""
+require_bins() {
+  for bin in curl jq; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      echo -e "${RED}[✗] Necesitas instalar '${bin}'.${NC}" >&2
+      exit 1
+    fi
+  done
+}
 
-# Verificar jq instalado
-if ! command -v jq &> /dev/null; then
-    echo -e "${RED}[✗] Error: jq no está instalado${NC}"
-    echo -e "${YELLOW}Instalar con: sudo apt install jq${NC}"
-    exit 1
-fi
+load_config() {
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+    VULN_API="${BOLA_VULN_API:-${VULN_API}}"
+    SECURE_API="${BOLA_SECURE_API:-${SECURE_API}}"
+    EMAIL="${BOLA_EMAIL:-$EMAIL}"
+    PASSWORD="${BOLA_PASSWORD:-$PASSWORD}"
+    TARGET_ORDER_ID="${BOLA_TARGET_ORDER_ID:-$TARGET_ORDER_ID}"
+    REQUEST_TIMEOUT="${COMPARE_TIMEOUT:-$REQUEST_TIMEOUT}"
+    RESULTS_DIR="${COMPARE_RESULTS_DIR:-$RESULTS_DIR}"
+    SLEEP_TIME="${COMPARE_SLEEP:-$SLEEP_TIME}"
+  fi
+}
 
-# ═══════════════════════════════════════════════════════════
-# FASE 1: Autenticación
-# ═══════════════════════════════════════════════════════════
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -v|--vuln) VULN_API="$2"; shift 2 ;;
+      -s|--secure) SECURE_API="$2"; shift 2 ;;
+      -e|--email) EMAIL="$2"; shift 2 ;;
+      -p|--password) PASSWORD="$2"; shift 2 ;;
+      -o|--order-id) TARGET_ORDER_ID="$2"; shift 2 ;;
+      -t|--timeout) REQUEST_TIMEOUT="$2"; shift 2 ;;
+      -r|--results-dir) RESULTS_DIR="$2"; shift 2 ;;
+      --sleep) SLEEP_TIME="$2"; shift 2 ;;
+      -c|--config) CONFIG_FILE="$2"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo -e "${YELLOW}[?] Opción desconocida: $1${NC}" >&2; usage; exit 1 ;;
+    esac
+  done
+}
 
-echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
-echo -e "${CYAN}FASE 1: AUTENTICACIÓN${NC}"
-echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
-echo ""
-
-echo -e "${YELLOW}[*] Autenticando como Alice...${NC}"
+normalize_base() {
+  VULN_API="${VULN_API%/}"
+  SECURE_API="${SECURE_API%/}"
+}
 
 # Login en API vulnerable
 TOKEN_VULN=$(curl -s -X POST "$VULN_API/api/auth/login" \
