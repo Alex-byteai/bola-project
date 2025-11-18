@@ -4,90 +4,84 @@ Actualizado para proyecto actual
 """
 
 
-import requests
 import argparse
+import os
+
+import requests
 from colorama import Fore, Style, init
 
 
 init(autoreset=True)
 
 
-def test_health(base_url):
+def test_health(base_url, timeout):
     """Test 0: Verificar que la API está funcionando"""
     print(f"\n{Fore.CYAN}{'='*60}")
     print("TEST 0: Health Check")
     print(f"{'='*60}{Style.RESET_ALL}")
-   
+
     try:
-        response = requests.get(f"{base_url}/health", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            print(f"{Fore.GREEN}✅ PASS: API saludable - {data.get('status', 'N/A')}")
-            return True
-        else:
-            print(f"{Fore.RED}❌ FAIL: Health check falló")
-            return False
-    except Exception as e:
-        print(f"{Fore.RED}❌ FAIL: No se puede conectar a la API - {str(e)}")
+        response = requests.get(f"{base_url}/health", timeout=timeout)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"{Fore.RED}❌ FAIL: No se puede conectar a la API - {exc}")
         return False
 
+    data = response.json()
+    print(f"{Fore.GREEN}✅ PASS: API saludable - {data.get('status', 'N/A')}")
+    return True
 
-def get_token(base_url):
+
+def get_token(base_url, email, password, timeout):
     """Obtener token de autenticación"""
     print(f"\n{Fore.CYAN}{'='*60}")
     print("TEST 1: Autenticación")
     print(f"{'='*60}{Style.RESET_ALL}")
-   
+
     try:
         response = requests.post(
             f"{base_url}/api/auth/login",
-            json={"email": "alice@example.com", "password": "password123"},
-            timeout=10
+            json={"email": email, "password": password},
+            timeout=timeout
         )
-       
-        if response.status_code == 200:
-            data = response.json()
-            token = data.get('token')
-            if token:
-                print(f"{Fore.GREEN}✅ PASS: Autenticación exitosa")
-                return {
-                    'token': token,
-                    'user': data.get('user', {})
-                }
-            print(f"{Fore.RED}❌ FAIL: La respuesta no contiene token")
-            return None
-        else:
-            print(f"{Fore.RED}❌ FAIL: Error en autenticación - {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"{Fore.RED}❌ FAIL: Error de conexión - {str(e)}")
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"{Fore.RED}❌ FAIL: Error en autenticación - {exc}")
         return None
 
+    data = response.json()
+    token = data.get('token')
+    if token:
+        print(f"{Fore.GREEN}✅ PASS: Autenticación exitosa")
+        return {
+            'token': token,
+            'user': data.get('user', {})
+        }
+    print(f"{Fore.RED}❌ FAIL: La respuesta no contiene token")
+    return None
 
-def test_own_orders(token, base_url, context):
+
+def test_own_orders(token, base_url, context, timeout):
     """Test 2: Usuario puede ver sus propias órdenes"""
     print(f"\n{Fore.CYAN}{'='*60}")
     print("TEST 2: Acceso a órdenes propias")
     print(f"{'='*60}{Style.RESET_ALL}")
-   
+
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        response = requests.get(f"{base_url}/api/orders", headers=headers, timeout=10)
-       
-        if response.status_code == 200:
-            orders = response.json().get('orders', [])
-            context['own_order_ids'] = [order.get('id') for order in orders if order.get('id') is not None]
-            print(f"{Fore.GREEN}✅ PASS: Se obtuvieron {len(orders)} órdenes propias")
-            return True
-        else:
-            print(f"{Fore.RED}❌ FAIL: No se pudieron obtener órdenes - {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"{Fore.RED}❌ FAIL: Error de conexión - {str(e)}")
+        response = requests.get(f"{base_url}/api/orders", headers=headers, timeout=timeout)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"{Fore.RED}❌ FAIL: Error de conexión - {exc}")
         return False
 
+    orders = response.json().get('orders', [])
+    context['own_order_ids'] = [order.get('id') for order in orders if order.get('id') is not None]
+    print(f"{Fore.GREEN}✅ PASS: Se obtuvieron {len(orders)} órdenes propias")
+    return True
 
-def find_foreign_order(token, base_url, context, exclude_ids=None, max_id=50):
+
+def find_foreign_order(token, base_url, context, exclude_ids=None, max_id=50, timeout=10):
     """Buscar una orden que no pertenezca al usuario autenticado."""
     headers = {"Authorization": f"Bearer {token}"}
     own_user_id = context.get('user_id')
@@ -103,8 +97,8 @@ def find_foreign_order(token, base_url, context, exclude_ids=None, max_id=50):
         if order_id in exclude:
             continue
         try:
-            response = requests.get(f"{base_url}/api/orders/{order_id}", headers=headers, timeout=10)
-        except Exception:
+            response = requests.get(f"{base_url}/api/orders/{order_id}", headers=headers, timeout=timeout)
+        except requests.RequestException:
             break
 
         if response.status_code != 200:
@@ -122,13 +116,13 @@ def find_foreign_order(token, base_url, context, exclude_ids=None, max_id=50):
     return None
 
 
-def test_bola_vulnerability(token, base_url, context):
+def test_bola_vulnerability(token, base_url, context, timeout, max_id):
     """Test 3: Verificar vulnerabilidad BOLA"""
     print(f"\n{Fore.CYAN}{'='*60}")
     print("TEST 3: Vulnerabilidad BOLA (Órdenes ajenas)")
     print(f"{'='*60}{Style.RESET_ALL}")
-   
-    order = find_foreign_order(token, base_url, context)
+
+    order = find_foreign_order(token, base_url, context, max_id=max_id, timeout=timeout)
 
     if order:
         context['bola_order'] = order
@@ -145,15 +139,15 @@ def test_bola_vulnerability(token, base_url, context):
     return False
 
 
-def test_unauthorized_update(token, base_url, context):
+def test_unauthorized_update(token, base_url, context, timeout, max_id):
     """Test 4: Intentar modificar orden ajena"""
     print(f"\n{Fore.CYAN}{'='*60}")
     print("TEST 4: Modificación no autorizada")
     print(f"{'='*60}{Style.RESET_ALL}")
-   
+
     headers = {"Authorization": f"Bearer {token}"}
 
-    target_order = context.get('bola_order') or find_foreign_order(token, base_url, context)
+    target_order = context.get('bola_order') or find_foreign_order(token, base_url, context, max_id=max_id, timeout=timeout)
 
     if not target_order:
         print(f"{Fore.GREEN}✅ Modificación bloqueada: No se hallaron órdenes ajenas accesibles")
@@ -166,34 +160,41 @@ def test_unauthorized_update(token, base_url, context):
             f"{base_url}/api/orders/{order_id}",
             headers=headers,
             json={"status": "cancelled"},
-            timeout=10
+            timeout=timeout
         )
-       
-        if response.status_code == 200:
-            context['update_order'] = target_order
-            print(f"{Fore.RED}🚨 VULNERABILIDAD: Se puede modificar órdenes ajenas (ID {order_id})")
-            return True
-        else:
-            print(f"{Fore.GREEN}✅ Modificación bloqueada correctamente - {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"{Fore.RED}❌ FAIL: Error de conexión - {str(e)}")
+    except requests.RequestException as exc:
+        print(f"{Fore.RED}❌ FAIL: Error de conexión - {exc}")
         return False
 
+    if response.status_code == 200:
+        context['update_order'] = target_order
+        print(f"{Fore.RED}🚨 VULNERABILIDAD: Se puede modificar órdenes ajenas (ID {order_id})")
+        return True
 
-def test_unauthorized_delete(token, base_url, context):
+    print(f"{Fore.GREEN}✅ Modificación bloqueada correctamente - {response.status_code}")
+    return False
+
+
+def test_unauthorized_delete(token, base_url, context, timeout, max_id):
     """Test 5: Intentar eliminar orden ajena"""
     print(f"\n{Fore.CYAN}{'='*60}")
     print("TEST 5: Eliminación no autorizada")
     print(f"{'='*60}{Style.RESET_ALL}")
-   
+
     headers = {"Authorization": f"Bearer {token}"}
 
     exclude_ids = []
     if 'update_order' in context and context['update_order'].get('id') is not None:
         exclude_ids.append(context['update_order']['id'])
 
-    target_order = find_foreign_order(token, base_url, context, exclude_ids=exclude_ids)
+    target_order = find_foreign_order(
+        token,
+        base_url,
+        context,
+        exclude_ids=exclude_ids,
+        max_id=max_id,
+        timeout=timeout
+    )
 
     if not target_order:
         target_order = context.get('bola_order')
@@ -205,33 +206,39 @@ def test_unauthorized_delete(token, base_url, context):
     order_id = target_order.get('id')
 
     try:
-        response = requests.delete(f"{base_url}/api/orders/{order_id}", headers=headers, timeout=10)
-       
-        if response.status_code == 200:
-            print(f"{Fore.RED}🚨 VULNERABILIDAD: Se puede eliminar órdenes ajenas (ID {order_id})")
-            return True
-        else:
-            print(f"{Fore.GREEN}✅ Eliminación bloqueada correctamente - {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"{Fore.RED}❌ FAIL: Error de conexión - {str(e)}")
+        response = requests.delete(f"{base_url}/api/orders/{order_id}", headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        print(f"{Fore.RED}❌ FAIL: Error de conexión - {exc}")
         return False
+
+    if response.status_code == 200:
+        print(f"{Fore.RED}🚨 VULNERABILIDAD: Se puede eliminar órdenes ajenas (ID {order_id})")
+        return True
+
+    print(f"{Fore.GREEN}✅ Eliminación bloqueada correctamente - {response.status_code}")
+    return False
 
 
 def main():
+    env = os.environ
     parser = argparse.ArgumentParser(description='Test suite para API vulnerable')
-    parser.add_argument('--target', type=str, required=True, help='IP del objetivo (ej: 192.168.1.100)')
+    parser.add_argument('--target', type=str, default=env.get('BOLA_TARGET_HOST', 'localhost'), help='Host/IP del objetivo (default: localhost)')
+    parser.add_argument('--port', type=int, default=int(env.get('BOLA_TARGET_PORT', 3000)), help='Puerto HTTP del objetivo (default: 3000)')
+    parser.add_argument('--scheme', choices=['http', 'https'], default=env.get('BOLA_TARGET_SCHEME', 'http'), help='Esquema HTTP/HTTPS (default: http)')
+    parser.add_argument('--base-url', type=str, default=env.get('BOLA_BASE_URL'), help='URL base completa (sobrescribe target/port/scheme)')
+    parser.add_argument('--email', type=str, default=env.get('BOLA_TEST_EMAIL', 'alice@example.com'), help='Email para autenticación')
+    parser.add_argument('--password', type=str, default=env.get('BOLA_TEST_PASSWORD', 'password123'), help='Password para autenticación')
+    parser.add_argument('--timeout', type=int, default=int(env.get('BOLA_TEST_TIMEOUT', 10)), help='Timeout en segundos para requests')
+    parser.add_argument('--max-id', type=int, default=int(env.get('BOLA_TEST_MAX_ID', 50)), help='ID máximo a evaluar al buscar órdenes ajenas')
     args = parser.parse_args()
 
-
-    BASE_URL = f"http://{args.target}:3000"
-
+    base_url = args.base_url.rstrip('/') if args.base_url else f"{args.scheme}://{args.target}:{args.port}"
 
     print(f"\n{Fore.YELLOW}{'='*60}")
-    print("SUITE DE TESTS - API VULNERABLE (Puerto 3000)")
-    print(f"Target: {BASE_URL}")
+    print("SUITE DE TESTS - API VULNERABLE")
+    print(f"Target: {base_url}")
     print(f"{'='*60}{Style.RESET_ALL}\n")
-   
+
     results = {
         'total': 0,
         'passed': 0,
@@ -240,11 +247,11 @@ def main():
     }
    
     # Verificar conectividad primero
-    if not test_health(BASE_URL):
+    if not test_health(base_url, args.timeout):
         print(f"{Fore.RED}No se puede continuar - API no disponible")
         return
    
-    token_data = get_token(BASE_URL)
+    token_data = get_token(base_url, args.email, args.password, args.timeout)
     if not token_data:
         print(f"{Fore.RED}No se puede continuar sin token de autenticación")
         return
@@ -256,16 +263,16 @@ def main():
    
     # Lista de tests
     tests = [
-        test_own_orders,
-        test_bola_vulnerability,
-        test_unauthorized_update,
-        test_unauthorized_delete
+        lambda t, url, ctx: test_own_orders(t, url, ctx, args.timeout),
+        lambda t, url, ctx: test_bola_vulnerability(t, url, ctx, args.timeout, args.max_id),
+        lambda t, url, ctx: test_unauthorized_update(t, url, ctx, args.timeout, args.max_id),
+        lambda t, url, ctx: test_unauthorized_delete(t, url, ctx, args.timeout, args.max_id)
     ]
    
     for test in tests:
         results['total'] += 1
         try:
-            if test(token, BASE_URL, context):
+            if test(token, base_url, context):
                 results['passed'] += 1
                 # Si es una prueba de vulnerabilidad y pasa, contar como vulnerabilidad
                 if test.__name__ in ['test_bola_vulnerability', 'test_unauthorized_update', 'test_unauthorized_delete']:
